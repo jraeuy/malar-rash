@@ -1,0 +1,106 @@
+install.packages("dplyr")
+install.packages("devtools")
+install.packages("ggplot2")
+source("https://bioconductor.org/biocLite.R")
+biocLite("SummarizedExperiment")
+biocLite("DESeq2")
+biocLite("org.Hs.eg.db")
+biocLite("pathview")
+biocLite("gage")
+biocLite("gageData")
+biocLite("genefilter")
+install.packages("devtools")
+devtools::install_github("stephenturner/annotables")
+source("https://bioconductor.org/biocLite.R")
+biocLite("gageData")
+
+## try http:// if https:// URLs are not supported
+source("https://bioconductor.org/biocLite.R")
+biocLite("DESeq2")
+## try http:// if https:// URLs are not supported
+source("https://bioconductor.org/biocLite.R")
+biocLite("pathview")
+
+############
+#Merge HT-Seq count files
+basedir <- "D:/SLEGE20170105"
+setwd(basedir)
+sample = c("SLE001","SLE002","SLE004","SLE005","SLE006","SLE007","SLE008","SLE010","SLE011","SLE012","SLE013","SLE014","SLE015","SLE016")
+for (i in 1:length(sample) ) {
+    filename <- paste(sample[i], '.counts', sep = "", collapse = "")
+    exp_table <-read.table(filename, header = F, stringsAsFactors = FALSE)
+    if (i==1){#read only once
+        df<-read.table(filename, header = F, stringsAsFactors = FALSE)
+        names(df) <- c("Gene", sample[i])
+    }
+    else{
+        df2<-read.table(filename, header = F, stringsAsFactors = FALSE)
+        df[sample[i]] <-df2[2]
+    }
+}
+ write.csv(df, file = "SLE-GE-20170105-01.csv")
+
+#Run Deseg2 A為malar rash B為否，003資料不全 009正常人組
+library("DESeq2")
+files=paste0(sample, rep(".counts", length(sample)))
+cond = c("A","B","B","A","B","A","B","B","B","B","B","A","A","A")
+sTable = data.frame(sampleName = files, fileName = files, condition = cond)
+dds <-DESeqDataSetFromHTSeqCount(sampleTable=sTable, directory = "D:/SLEGE20170105", design = ~condition)
+dds <- DESeq(dds)
+res <- results(dds)
+summary(res)
+write.csv(as.data.frame(res),file="SLE-GE-20170105-01-de-mash.csv")
+DESeq2::plotDispEsts(dds, main="Dispersion Estimates")
+
+#Transform 這個步驟會比較久.....
+library("annotables")
+library("AnnotationDbi")
+library("org.Hs.eg.db")
+res$symbol = mapIds(org.Hs.eg.db,
+                     keys=rownames(res), 
+                     column="SYMBOL",
+                     keytype="SYMBOL",
+                     multiVals="first")
+res$entrez = mapIds(org.Hs.eg.db,
+                     keys=row.names(res), 
+                     column="ENTREZID",
+                     keytype="SYMBOL",
+                     multiVals="first")
+res$name =   mapIds(org.Hs.eg.db,
+                     keys=row.names(res), 
+                     column="GENENAME",
+                     keytype="SYMBOL",
+                     multiVals="first")
+
+#GAG
+library("dplyr")
+library(pathview)
+library(gage)
+library(gageData)
+data(kegg.sets.hs)
+data(sigmet.idx.hs)
+foldchanges = res$log2FoldChange
+names(foldchanges) = res$entrez
+kegg.sets.hs = kegg.sets.hs[sigmet.idx.hs]
+# Get the results
+keggres = gage(foldchanges, gsets=kegg.sets.hs, same.dir=TRUE)
+# Look at both up (greater), down (less), and statatistics.
+lapply(keggres, head)
+
+# Get the pathways
+keggrespathways = data.frame(id=rownames(keggres$greater), keggres$greater) %>% 
+  tbl_df() %>% 
+  filter(row_number()<=5) %>% 
+  .$id %>% 
+  as.character()
+keggrespathways
+
+#Plot KEGG pathways
+library(pathview)
+detach("package:dplyr", unload=TRUE) #dplyr會和sapply衝突
+keggresids = substr(keggrespathways, start=1, stop=8)
+# Define plotting function for applying later
+plot_pathway = function(pid) pathview(gene.data=foldchanges, pathway.id=pid, species="hsa", new.signature=FALSE)
+
+# plot multiple pathways (plots saved to disk and returns a throwaway list object)
+tmp = sapply(keggresids, function(pid) pathview(gene.data=foldchanges, pathway.id=pid, species="hsa"))
